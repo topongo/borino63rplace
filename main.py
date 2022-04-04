@@ -6,6 +6,7 @@ from threading import Thread
 from random import choice
 from datetime import datetime, timedelta
 from time import sleep
+from colors import COLOR_MAP, NAME_MAP
 
 
 t = TelegramBot("5139141922:AAG0isSx8jGoS6s-giOS6SSUUKWA49rWpQs")
@@ -18,6 +19,14 @@ class Contributor:
         self.r_username = r
         self.assigned = None
         self.last_assignment = datetime.now()
+        self.history = []
+
+    def archive(self):
+        if self.assigned is None:
+            return
+        self.history.append(self.assigned)
+        self.assigned = None
+        contributors.write()
 
     def serialize(self):
         try:
@@ -31,16 +40,26 @@ class Contributor:
             "telegram": self.user.raw,
             "reddit": {
                 "username": self.r_username,
-                "pixel": px
-            }
+                "pixel": px,
+                "last_assignment": self.last_assignment.timestamp()
+            },
+            "history": [
+                i.serialize() for i in self.history
+            ]
         }
 
-    def assign(self, pm):
-        assert isinstance(pm, PixelMap)
+    def assign(self):
         if self.assigned:
-            pm.pixel_done(self.assigned)
-        pm.get_pixel().assign(self)
-        self.last_assignment = datetime.now()
+            pixelmap.pixel_done(self.assigned)
+            self.archive()
+        try:
+            pixelmap.get_pixel().assign(self)
+            self.last_assignment = datetime.now()
+            pixelmap.write()
+            contributors.write()
+            return True
+        except AttributeError:
+            pass
 
     def cooldown(self):
         return self.last_assignment + timedelta(minutes=5) <= datetime.now()
@@ -55,6 +74,8 @@ class Contributors:
                 if px := pixelmap.get(*i["reddit"]["pixel"]):
                     px.assign(self.data[-1])
                     self.data[-1].last_assignment = datetime.fromtimestamp(i["reddit"]["last_assignment"])
+                    for k in i["history"]:
+                        self.data[-1].history.append(pixelmap.get(k["x"], k["y"]))
 
     def add_contributor(self, c: Contributor):
         self.data.append(c)
@@ -83,41 +104,6 @@ class Contributors:
 
 
 class Pixel:
-    COLORS = [
-        "burgundy",
-        "dark red",
-        "red",
-        "orange",
-        "yellow",
-        "pale yellow",
-        "dark green",
-        "green",
-        "light green",
-        "dark teal",
-        "teal",
-        "light teal",
-        "dark blue",
-        "blue",
-        "light blue",
-        "indigo",
-        "periwinkle",
-        "lavender",
-        "dark purple",
-        "purple",
-        "pale purple",
-        "magenta",
-        "pink",
-        "light pink",
-        "dark brown",
-        "brown",
-        "beige",
-        "black",
-        "dark gray",
-        "gray",
-        "light gray",
-        "white"
-    ]
-
     def __init__(self, x, y, color, done=None):
         self.x = x
         self.y = y
@@ -133,32 +119,49 @@ class Pixel:
             self.user.assigned = self
 
     def represent(self):
-        return f"Pixel({self.x}, {self.y}, {self.COLORS[self.color]})"
+        return f"Pixel({self.x}, {self.y}, {NAME_MAP[self.color]})"
+
+    def serialize(self):
+        return {
+            "x": self.x,
+            "y": self.y,
+            "color": self.color
+        }
 
 
 class PixelMap:
     def __init__(self, pre_data):
         self.data = []
-        if pre_data:
-            for i in pre_data:
-                self.data.append([])
-                for j in i:
-                    self.data[-1].append(Pixel(j["x"], j["y"], j["color"]))
+        for i in pre_data:
+            self.data.append(Pixel(i["x"], i["y"], i["color"]))
 
     def get_pixel(self):
-        r = choice(choice(self.data))
+        r = choice(self.data)
         while r.user or r.done:
-            r = choice(choice(self.data))
+            r = choice(self.data)
         return r
 
     def get(self, x, y) -> Pixel:
-        for i in self.data:
-            for j in i:
-                if j.x == x and j.y == y:
-                    return j
+        for j in self.data:
+            if j.x == x and j.y == y:
+                return j
 
     def pixel_done(self, p: Pixel):
         self.get(p.x, p.y).done = True
+
+    def serialize(self):
+        out = []
+        for j in self.data:
+            out.append(j.serialize())
+        return out
+
+    def write(self):
+        json.dump(self.serialize(), open("pixelmap.json", "w+"))
+
+    def get_done(self):
+        for i in self.data:
+            if i.done:
+                yield i
 
 
 if os.path.exists("pixelmap.json"):
@@ -203,7 +206,7 @@ def assign(msg: TelegramBot.Update.Message):
         t.sendMessage(msg.from_, f"Hai già un pixel assegnato: {tgt.assigned.represent()}\n"
                                  f"Usa /forceassign per fartene assegnare uno prima dello scadere dei 5 minuti.")
     else:
-        if tgt.assign(pixelmap):
+        if tgt.assign():
             t.sendMessage(msg.from_, f"Pixel assegnato! `{tgt.assigned.represent()}`")
         else:
             t.sendMessage(msg.from_, f"Non ci sono pixel disponibili per ora!")
@@ -212,46 +215,68 @@ def assign(msg: TelegramBot.Update.Message):
 def assign_force(msg: TelegramBot.Update.Message):
     tgt = contributors.get(msg.from_)
 
-    tgt.assign(pixelmap)
+    tgt.assign()
+
     t.sendMessage(msg.from_, f"Pixel assegnato! `{tgt.assigned.represent()}`")
 
 
-def reminder(c: Contributors, p: PixelMap):
-    for i in c.data:
-        if i.assigned and i.cooldown():
-            i.assigned = None
-            t.sendMessage(i.user, "Hei ricordati di me, sono passati 5 minuti, puoi chiedermi un nuovo pixel se vuoi.")
-    sleep(5)
+def history(msg: TelegramBot.Update.Message):
+    tgt = contributors.get(msg.from_)
+    out = "I tuoi pixel:\n"
+    for i in tgt.history:
+        out += f"- {i.represent()}\n"
+    t.sendMessage(msg.from_, out)
 
+
+def reminder(c: Contributors, p: PixelMap):
+    while True:
+        for i in c.data:
+            if i.assigned and i.cooldown():
+                i.archive()
+                t.sendMessage(i.user,
+                              "Hei ricordati di me, sono passati 5 minuti, puoi chiedermi un nuovo pixel se vuoi.")
+                contributors.write()
+
+        sleep(5)
 
 tr = Thread(target=reminder, args=(contributors, pixelmap))
 tr.start()
 
-wait_for(
-    t,
-    # new subscriptions
-    Condition(
-        Filter(lambda l: not contributors.is_contributor(l.from_)),
-        callback=new_contributor
-    ),
-    # change reddit name
-    Condition(
-        Filter(lambda l: contributors.is_contributor(l.from_)),
-        Filter(lambda l: l.text.split(" ")[0] == "/changereddit" and len(l.text.split(" ")) > 1),
-        callback=change_r_name
-    ),
-    # assign me one pixel
-    Condition(
-        Filter(lambda l: contributors.is_contributor(l.from_)),
-        Filter(lambda l: l.text.split(" ")[0] == "/assign"),
-        callback=assign
-    ),
-    # forcibly assign a new pixel
-    Condition(
-        Filter(lambda l: contributors.is_contributor(l.from_)),
-        Filter(lambda l: l.text.split(" ")[0] == "/forceassign"),
-        callback=assign_force
-    )
+try:
+    wait_for(
+        t,
+        # new subscriptions
+        Condition(
+            Filter(lambda l: not contributors.is_contributor(l.from_)),
+            callback=new_contributor
+        ),
+        # change reddit name
+        Condition(
+            Filter(lambda l: contributors.is_contributor(l.from_)),
+            Filter(lambda l: l.text.split(" ")[0] == "/changereddit" and len(l.text.split(" ")) > 1),
+            callback=change_r_name
+        ),
+        # assign me one pixel
+        Condition(
+            Filter(lambda l: contributors.is_contributor(l.from_)),
+            Filter(lambda l: l.text.split(" ")[0] == "/assign"),
+            callback=assign
+        ),
+        # forcibly assign a new pixel
+        Condition(
+            Filter(lambda l: contributors.is_contributor(l.from_)),
+            Filter(lambda l: l.text.split(" ")[0] == "/forceassign"),
+            callback=assign_force
+        ),
+        # list previously assignments
+        Condition(
+            Filter(lambda l: contributors.is_contributor(l.from_)),
+            Filter(lambda l: l.text.split(" ")[0] == "/history"),
+            callback=history
+        )
 
-)
+    )
+except Exception as e:
+    contributors.write()
+    raise e
 
