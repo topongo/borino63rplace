@@ -52,7 +52,7 @@ class Contributors:
         if pre_data:
             for i in pre_data:
                 self.data.append(Contributor(TelegramBot.User(i["telegram"]), i["reddit"]["username"]))
-                if px := pixelmap.get(*i["reddit"]["px"]):
+                if px := pixelmap.get(*i["reddit"]["pixel"]):
                     px.assign(self.data[-1])
                     self.data[-1].last_assignment = datetime.fromtimestamp(i["reddit"]["last_assignment"])
 
