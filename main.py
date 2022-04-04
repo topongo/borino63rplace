@@ -55,11 +55,10 @@ class Contributor:
         try:
             pixelmap.get_pixel().assign(self)
             self.last_assignment = datetime.now()
-            pixelmap.write()
             contributors.write()
             return True
         except AttributeError:
-            pass
+            return
 
     def cooldown(self):
         return self.last_assignment + timedelta(minutes=5) <= datetime.now()
@@ -88,7 +87,7 @@ class Contributors:
         return out
 
     def write(self):
-        json.dump(self.serialize(), open("contributors.json", "w+"))
+        json.dump(self.serialize(), open("contributors.json", "w+"), indent=4)
 
     def is_contributor(self, u: TelegramBot.User):
         for i in self.data:
@@ -136,10 +135,10 @@ class PixelMap:
             self.data.append(Pixel(i["x"], i["y"], i["color"]))
 
     def get_pixel(self):
-        r = choice(self.data)
-        while r.user or r.done:
-            r = choice(self.data)
-        return r
+        not_assigned = list([i for i in self.data if not i.done and not i.user])
+        if len(not_assigned) == 0:
+            return
+        return choice(not_assigned)
 
     def get(self, x, y) -> Pixel:
         for j in self.data:
@@ -175,6 +174,9 @@ if os.path.exists("contributors.json"):
     contributors = Contributors(json.load(open("contributors.json")))
 else:
     contributors = Contributors()
+
+while contributors.get(TelegramBot.User.by_id(None, 461073396)).assign():
+    pass
 
 
 def new_contributor(msg: TelegramBot.Update.Message):
@@ -238,6 +240,7 @@ def reminder(c: Contributors, p: PixelMap):
                 contributors.write()
 
         sleep(5)
+
 
 tr = Thread(target=reminder, args=(contributors, pixelmap))
 tr.start()
