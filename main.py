@@ -137,7 +137,7 @@ class Pixel:
 
 
 class PixelMap:
-    def __init__(self, pre_data=None):
+    def __init__(self, pre_data):
         self.data = []
         if pre_data:
             for i in pre_data:
@@ -164,7 +164,8 @@ class PixelMap:
 if os.path.exists("pixelmap.json"):
     pixelmap = PixelMap(json.load(open("pixelmap.json")))
 else:
-    pixelmap = PixelMap()
+    print("No pixelmap found.")
+    exit()
 
 
 if os.path.exists("contributors.json"):
