@@ -202,8 +202,10 @@ def assign(msg: TelegramBot.Update.Message):
         t.sendMessage(msg.from_, f"Hai già un pixel assegnato: {tgt.assigned.represent()}\n"
                                  f"Usa /forceassign per fartene assegnare uno prima dello scadere dei 5 minuti.")
     else:
-        tgt.assign(pixelmap)
-        t.sendMessage(msg.from_, f"Pixel assegnato! `{tgt.assigned.represent()}`")
+        if tgt.assign(pixelmap):
+            t.sendMessage(msg.from_, f"Pixel assegnato! `{tgt.assigned.represent()}`")
+        else:
+            t.sendMessage(msg.from_, f"Non ci sono pixel disponibili per ora!")
 
 
 def assign_force(msg: TelegramBot.Update.Message):
